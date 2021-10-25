@@ -12,12 +12,13 @@ params:
   password: "district"
   startdate: "2015-01-01"
   enddate: "2021-12-01"
-    
+  viz_focus: "gnROK20DfAA"
 ---
 
 ```{r setup, include=FALSE, echo = FALSE}
 knitr::opts_chunk$set(echo=TRUE, message=FALSE, warning=FALSE)
 options(encoding = "UTF-8")
+
 ```
 
 Sections:
@@ -39,7 +40,7 @@ To do:
 
 Set up and login
 
-```{r echo=FALSE, message=FALSE, warning=FALSE}
+```{r message=FALSE, warning=FALSE}
 
 # baseurl<-"https://play.dhis2.org/2.37dev/"
 # username<-"admin"
@@ -62,11 +63,14 @@ packages<-c("httr","assertthat","tidyverse","jsonlite","knitr","lubridate","here
 install_or_load_pack <- function(pack){
   create.pkg <- pack[!(pack %in% installed.packages()[, "Package"])]
   if (length(create.pkg))
-    install.packages(create.pkg, dependencies = TRUE)
+    install.packages(create.pkg, dependencies = TRUE, quiet=TRUE)
   sapply(pack, require, character.only = TRUE)
 }
 
 install_or_load_pack(packages)
+
+# Set theme for charts etc
+theme_set(theme_minimal())
 
 # Extract login info from directory
 # if (!file.exists("auth.json")){
@@ -89,11 +93,7 @@ if(loginDHIS2(baseurl,username,password)){
   stop("could not log in! Please check url, username and password in auth.json")
 }
 
-# Remove password
-# rm(password)
 
-# Set theme for charts etc
-theme_set(theme_minimal())
 
 ```
 
@@ -132,23 +132,27 @@ viz_users<-viz_list %>%
     map_dfr(~fetch_viz_obj(.)) %>% 
     mutate(type=if_else(is.na(type),toupper(obj_name),type))
 
-
-
-viz_users %>% select(name,type,int_count) %>% head() %>% 
-  kable(caption="A selection of visualizations and their interpretation count")
-
 # 
 # viz_users %>% 
 #   filter(is.na(creator_id) & !is.na(creator_name))
+
+
+viz_users %>% select(name,type,int_count) %>% slice_sample(n=6) %>% 
+  kable(caption="A selection of visualizations and their interpretation count")
+
+
 ```
 
 ## Total viz saved and interpretations by viz type
 
-Interpretations here does not include user comments.
+`r length(viz_users$id)` visualizations created by `r length(unique(viz_users$createdBy.id))` users.
+
+"Interpretations" here does not include _user comments_ on interpretations.
 
 ```{r}
 # viz_users %>% 
 #   count(type,sort=T)
+
 
 viz_users %>% 
   group_by(type) %>% 
@@ -159,9 +163,8 @@ viz_users %>%
 
 ```
 
-Visualizations -- list totals, bar chart of when created by year/month last 12 months, bar chart of top 20 users creating.
 
-"Viz" include event charts, event reports, pivot tables, and maps.
+"Viz" include all charts, event charts, event reports, pivot tables, and maps.
 
 ```{r}
 
@@ -186,7 +189,7 @@ viz_users %>%
 
 ```
 
-Top 10 users creating visualizations
+## Top users creating visualizations
 
 ```{r}
 viz_users %>% 
@@ -238,7 +241,7 @@ viz_users_dash_merged<-viz_users_dash %>%
 
 ```
 
-There are `r length(unique(dash_stats$dash_name))` total dashboards containing `r length(unique(viz_users_dash_merged$id))` total visualization objects.
+There are `r length(unique(dash_stats$dash_name))` total dashboards containing `r length(unique(viz_users_dash_merged$id))` total visualization objects. These are only of dashboards which the logged in user can access.
 
 ## Dashboard Views
 
@@ -323,12 +326,10 @@ dash_views<-views_dta %>%
   mutate(date=as.Date(ymd_hms((timestamp))),
          day=wday(date, label=TRUE, abbr=FALSE))
 
- # nrow(dash_views)
 ```
 
 In total, there are `r nrow(dash_views)` dashboard views across `r length(unique(dash_views$dash_name))` existing dashboards, by `r length(unique(dash_views$username))` users.
 
--   Dashboards -- Comparison (views, users, updatedvizes), over time, average views by hour of each day, distinct user-days viewing each dashboard
 
 ```{r}
 dash_views %>% 
@@ -457,7 +458,8 @@ total_int_users<-length(unique(interpretations$user))
   interpretations<-NULL
 }
 
-int_table
+int_table 
+
 ```
 
 Overall, `r total_int_comments` total interpretations and comments were left by `r total_int_users` users.
@@ -469,7 +471,8 @@ Print out the visualization with stats about it.
 A usage report for each visualization could look like this, with one page per visualization in the system.
 
 ```{r message=FALSE, warning=FALSE, messages=FALSE, warnings=FALSE}
-viz_focus<-"TPLm2dVoCtO"
+
+viz_focus<-params$viz_focus
 
 url<-paste0(baseurl, "api/visualizations/",viz_focus,"/data.png")
 # resp<-GET(url)
