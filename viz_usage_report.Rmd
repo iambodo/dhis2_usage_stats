@@ -1,0 +1,532 @@
+---
+title: "DHIS2 Analytics Usage Statistics"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 4
+    code_folding: hide
+params:
+  baseurl: "https://play.dhis2.org/2.37dev/"
+  username: "admin"
+  password: "district"
+  startdate: "2015-01-01"
+  enddate: "2021-12-01"
+    
+---
+
+```{r setup, include=FALSE, echo = FALSE}
+knitr::opts_chunk$set(echo=TRUE, message=FALSE, warning=FALSE)
+options(encoding = "UTF-8")
+```
+
+Sections:
+
+-   Visualizations -- list totals, bar chart of when created by year/month last 12 months, bar chart of top 20 users creating
+
+-   Interpretations -- Total+comments, total users, count for top 20 users, visualizations with an interpretation/comment
+
+-   Dashboards -- Comparison (views, users, visualizations), over time, average views by hour of each day, distinct user-days viewing each dashboard, interpretations left on dashboard objects
+
+-   Viz Profile -- Views for the image (total views and total users), interpretations+comments
+
+To do:
+
+-   Main issue is how to categorize & find the users of interest *at a local level.*
+-   Should target users all belong to a specific user group, or do they need read access below to a certain OU only? Prefer to put them all in same user group.
+-   Should visualizations include just those the target users created? Or those they can view in dashboards?
+-   Messages -- Total read and unread, by type, and month over month (TO DO)
+
+Set up and login
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+
+# baseurl<-"https://play.dhis2.org/2.37dev/"
+# username<-"admin"
+# password<-"district"
+# 
+# startdate<-"2015-01-01"
+# enddate<-"2021-12-01"
+
+# If set by parameters
+baseurl<-params$baseurl
+username<-params$username
+password<-params$password
+
+startdate<-params$startdate
+enddate<-params$enddate
+
+
+####Load required packages
+packages<-c("httr","assertthat","tidyverse","jsonlite","knitr","lubridate","here")      
+install_or_load_pack <- function(pack){
+  create.pkg <- pack[!(pack %in% installed.packages()[, "Package"])]
+  if (length(create.pkg))
+    install.packages(create.pkg, dependencies = TRUE)
+  sapply(pack, require, character.only = TRUE)
+}
+
+install_or_load_pack(packages)
+
+# Extract login info from directory
+# if (!file.exists("auth.json")){
+#   stop("Please add auth.json to directory") 
+# } else {
+#   baseurl<-chuck(fromJSON("auth.json"), "dhis","baseurl")
+#   username<-chuck(fromJSON("auth.json"), "dhis","username")
+# }
+
+
+##test login
+loginDHIS2<-function(baseurl,username,password){
+  url<-paste0(baseurl,"api/me")
+  r<-GET(url,authenticate(username,password))
+  assert_that(r$status_code == 200L)}
+
+if(loginDHIS2(baseurl,username,password)){
+  print("successfully logged in")
+}else{
+  stop("could not log in! Please check url, username and password in auth.json")
+}
+
+# Remove password
+# rm(password)
+
+# Set theme for charts etc
+theme_set(theme_minimal())
+
+```
+
+# Visualizations
+
+Extract visualizations and their interpretations
+
+```{r}
+
+#extract viz types
+#might wittle down the fields we want in request, later
+
+fetch_viz_obj<-function(obj_name){
+  
+url<-paste0(baseurl,"api/",obj_name,".json?fields=:all&paging=false")
+
+fromJSON(content(GET(url),type="text", encoding="UTF-8")) %>% 
+  pluck(obj_name) %>%
+  select(any_of(c("name","id","createdBy","created", "interpretations","type"))) %>%
+  jsonlite::flatten() %>% 
+  as_tibble() %>% 
+  complete() %>% 
+  mutate(int_count = map_int(interpretations, n_distinct),
+         obj_name = obj_name) %>% 
+  select(any_of(c("name","id", "type","int_count","obj_name","created", 
+                  "createdBy.name","createdBy.id")))
+         
+}
+
+# ev_viz<-fetch_viz_obj("eventReports")
+
+
+viz_list<-list("eventReports","maps","eventCharts","visualizations")
+
+viz_users<-viz_list %>% 
+    map_dfr(~fetch_viz_obj(.)) %>% 
+    mutate(type=if_else(is.na(type),toupper(obj_name),type))
+
+
+
+viz_users %>% select(name,type,int_count) %>% head() %>% 
+  kable(caption="A selection of visualizations and their interpretation count")
+
+# 
+# viz_users %>% 
+#   filter(is.na(creator_id) & !is.na(creator_name))
+```
+
+## Total viz saved and interpretations by viz type
+
+Interpretations here does not include user comments.
+
+```{r}
+# viz_users %>% 
+#   count(type,sort=T)
+
+viz_users %>% 
+  group_by(type) %>% 
+  summarize(total_saved=n(),
+            total_interpretations=sum(int_count)) %>% 
+  arrange(-total_saved) %>% 
+  knitr::kable(caption="Visualizations saved in time window")
+
+```
+
+Visualizations -- list totals, bar chart of when created by year/month last 12 months, bar chart of top 20 users creating.
+
+"Viz" include event charts, event reports, pivot tables, and maps.
+
+```{r}
+
+viz_users %>% 
+  mutate(year=year(created)) %>% 
+  count(year) %>%
+  complete(year=seq(min(year),max(year)), fill=list(n=0)) %>% 
+  ggplot(aes(x=year,y=n)) +
+  geom_col() +
+  labs(title="Visualizations Created By Year")
+
+
+viz_users %>% 
+    mutate(month=month(created,label=TRUE),
+           year=year(created)) %>% 
+    filter(year==year(Sys.Date())) %>% 
+    count(month) %>% 
+    complete(month, fill=list(n=0)) %>%
+    ggplot(aes(x=month,y=n)) +
+    geom_col() +
+    labs(title="Visualizations Created This Year By Month")
+
+```
+
+Top 10 users creating visualizations
+
+```{r}
+viz_users %>% 
+  count(createdBy.name, sort=T) %>% 
+  head(10) %>% 
+  kable(caption="Total visualizations created, top 10 users")
+
+```
+
+# Dashboards
+
+Extract objects within dashboards
+
+```{r}
+#Get a list of all objects in dashboards
+url<-paste0(baseurl,"api/dashboards.json?fields=name,id,dashboardItems&paging=false")
+dash<-fromJSON(content(GET(url),type="text", encoding="UTF-8"))
+
+dash_stats<-dash %>% 
+  pluck("dashboards") %>% 
+  unnest_longer(dashboardItems) %>% 
+  jsonlite::flatten() %>% 
+  as_tibble() %>% 
+  complete() %>% 
+  select("dash_name"=name,"dash_id"=id, dashboardItems.created,dashboardItems.lastUpdated,
+         dashboardItems.eventChart.id, dashboardItems.eventReport.id, 
+         dashboardItems.map.id, dashboardItems.visualization.id) %>% 
+  unite(col="dashItem_viz_id",dashboardItems.visualization.id:dashboardItems.eventReport.id, na.rm=T)
+
+# we can also measure if a dashboard object has been updated or created recently
+
+# dash_stats  %>% 
+#   mutate(updated=if_else(ymd_hms(dashboardItems.created)==ymd_hms(dashboardItems.lastUpdated), 0, 1)) %>% View()
+#   count(updated)
+
+viz_users_dash<-left_join(viz_users,dash_stats %>% select(dash_name,dash_id,dashItem_viz_id), 
+                          by=c("id"="dashItem_viz_id"))
+
+#Now we can see which dashboards each viz is a part of (considering dashboards the login user can access)
+viz_users_dash_merged<-viz_users_dash %>% 
+        complete() %>% 
+        group_by(across(.cols=name:int_count)) %>% 
+        mutate(dash=if_else(is.na(dash_name),0,1)) %>% 
+        summarize(dash_count=sum(dash),
+                  dash_list=paste(dash_name,collapse=" | ")) %>% 
+        ungroup()
+
+
+
+```
+
+There are `r length(unique(dash_stats$dash_name))` total dashboards containing `r length(unique(viz_users_dash_merged$id))` total visualization objects.
+
+## Dashboard Views
+
+```{r}
+
+#post the datastatisticsevent sql view and fetch data
+
+view_name<-"dataStatisticEvent_"
+view_id<-"R6iWYMIDiUt"
+
+sqlView<-list(
+  sqlViews=list(
+    list(name= view_name,
+      id= view_id,
+      sqlQuery= "select * from datastatisticsevent",
+      type= "MATERIALIZED_VIEW",
+      cacheStrategy= "NO_CACHE"
+)))
+
+
+payload<-jsonlite::toJSON(sqlView, auto_unbox = TRUE, pretty=TRUE)
+
+url<-paste0(baseurl,"api/metadata.json")
+
+r<-POST(url, body=payload, content_type_json())
+#check
+# content(r)
+
+## Update sharing settings
+url<-paste0(baseurl,"api/sharing?type=sqlView&id=",view_id)
+
+view_sharing<-list(object=
+                list(publicAccess="rwr------",
+                  externalAccess=FALSE,
+                  user=list(),
+                  userGroupAccesses=list()
+                )     )
+
+r<-POST(url, body=payload, content_type_json())
+#check
+#content(r)
+
+#Execute it
+url<-paste0(baseurl,"api/sqlViews/",view_id,"/execute")
+r<-POST(url)
+
+#finally extract datastat event table between dates
+url<-paste0(baseurl,"api/sqlViews/",view_id,"/data.csv?filter=timestamp:ge:",startdate,"&filter=timestamp:le:",enddate)
+
+r<-httr::GET(url, httr::authenticate(username,password),httr::timeout(60))
+output<-content(r)
+views_dta<-read_csv(output)
+
+
+# views_dta %>% 
+#   filter(!is.na(favoriteuid)) %>% 
+#   left_join(viz_users_dash %>% select(dash_name,dash_id), by=c("favoriteuid"="dash_id")) %>% 
+#   left_join(viz_users_dash,  by=c("favoriteuid"="dash_id"))
+
+# interpretations
+
+# views_dta
+
+```
+
+Now analyze the dashboard view data
+
+```{r}
+
+
+dashboards<-dash_stats %>% 
+  filter(!is.na(dashItem_viz_id)) %>% 
+  count(dash_id, dash_name, na.rm=T, name="dash_viz_objects") %>% 
+  select(dash_id, dash_name, dash_viz_objects) %>% 
+  na.omit() %>% 
+  distinct()
+
+dash_views<-views_dta %>% 
+  filter(str_detect(eventtype,"DASH") & !is.na(favoriteuid)) %>% 
+  left_join(dashboards, by=c("favoriteuid"="dash_id")) %>% 
+  mutate(dash_name=if_else(is.na(dash_name),paste0("unnamed_uid_",favoriteuid),dash_name)) %>% 
+  mutate(date=as.Date(ymd_hms((timestamp))),
+         day=wday(date, label=TRUE, abbr=FALSE))
+
+ # nrow(dash_views)
+```
+
+In total, there are `r nrow(dash_views)` dashboard views across `r length(unique(dash_views$dash_name))` existing dashboards, by `r length(unique(dash_views$username))` users.
+
+-   Dashboards -- Comparison (views, users, updatedvizes), over time, average views by hour of each day, distinct user-days viewing each dashboard
+
+```{r}
+dash_views %>% 
+  mutate(timestamp=as.Date(timestamp)) %>% 
+  group_by(dash_name, dash_viz_objects) %>% 
+  summarize(views=n(),
+            distinct_users=n_distinct(username,na.rm=T),
+            days_viewed=n_distinct(timestamp,na.rm=T),
+            distinct_user_days=n_distinct(paste0(username,timestamp))) %>% 
+  kable(caption="Comparison of dashboards by user views")
+
+```
+
+Over time, average views by hour of each day
+
+Might be helpful to know how patterns of dashboard views have changed over time.
+
+```{r}
+
+dash_views %>% 
+  filter(date>floor_date(as.Date(Sys.Date()-months(12)), unit="month")) %>% 
+  mutate(year=year(date),
+         week=as.integer(week(date))) %>% 
+  count(year,week) %>% 
+  group_by(year) %>%
+  complete(week=seq(from=1,to=52), fill=list(n=0)) %>% 
+  ggplot() +
+  geom_col(aes(x=week,y=n)) +
+  facet_wrap(~year, nrow=1) +
+  labs(title="Dashboard Views by Week, last 12 months")
+
+
+# Dashboard viewers by time of day 
+dash_tod<-dash_views %>% 
+  mutate(hour=hour(timestamp)) %>% 
+  group_by(date, hour) %>% 
+  summarize(views_date_hour=n()) %>% 
+  ungroup() %>% 
+  complete(date=seq.Date(from=min(date), to=max(date),by="days")) %>% 
+  group_by(date) %>% 
+  complete(hour=seq(from=0,to=23),fill=list(views_date_hour=0)) %>% 
+  mutate(day=wday(date, label=TRUE, abbr=FALSE)) %>% 
+  group_by(day,hour) %>% 
+  summarize(mean_views=mean(views_date_hour))
+
+
+dash_tod %>% 
+  ggplot(aes(x=hour,y=mean_views,color=day)) +
+  geom_line() +
+  facet_grid(~day) +
+  labs(title="Mean Dashboard Views By Day-Hour") +
+  theme(legend.position = "none")
+  
+dash_views %>% 
+  distinct(username,date) %>% 
+  count(username, sort=T) %>% 
+  head(10) %>% 
+  kable(caption="Most days viewing dashboard(s), by user")
+
+```
+
+# Interpretations + Comments
+
+-   Interpretations -- Total+comments, total users, count for top 20 users, visualizations with an interpretation/comment
+
+```{r}
+#fetch all interpretations within start/end date
+#total interpretations by user
+#total visualizations with an interpretation
+#average char. length of interpretations
+
+#Get a list of all interpretations and comments
+url<-paste0(baseurl,
+            "api/interpretations?fields=id,created,text,likes,type,user[id]",
+            ",visualization,eventReport,map,eventChart,comments[text,user,created]",
+            "&paging=false")
+ints<-fromJSON(content(GET(url),type="text", encoding="UTF-8"))
+
+# Skip this if there are no interpretations
+if (!is_null(ints$interpretations)){
+  
+interpretations<-ints %>% 
+  pluck("interpretations") %>% 
+  unnest_longer(comments) %>% 
+    jsonlite::flatten() %>% 
+  # select(name,id,type,createdBy,interpretations) %>%
+  as_tibble() %>% 
+  complete() %>%
+  select("int_id"=id,type,likes,text,user.id,created,
+         comments.text,comments.user.id,comments.created,
+         ends_with(".id")) %>% 
+  unite(col="viz_item_id",visualization.id:eventReport.id,na.rm=T) %>% 
+  pivot_longer(cols=c(text,comments.text),names_to="text_type",values_to="text") %>% 
+  filter(!is.na(text)) %>% 
+  mutate(user=if_else(text_type=="text",user.id,comments.user.id),
+         created=if_else(text_type=="text",created,comments.created),
+         length=str_length(text)) %>% 
+  select(everything(),-comments.created,-comments.user.id,-user.id) %>% distinct()
+
+## Selectively fetch the users who have written interpretations
+int_users<-paste0(unique(interpretations$user),collapse=",")
+url<-paste0(baseurl,"api/users.csv?paging=false&fields=id,name&filter=id:in:[",int_users,"]")
+int_users<-read_csv(content(GET(url),type="text", encoding="UTF-8"))
+
+int_table<-interpretations %>%
+  mutate(date=as.Date(created)) %>% 
+  left_join(int_users, by=c("user"="id")) %>% 
+  group_by(name, user) %>%
+  summarize("total interpretations"=n(),
+    "unique items with interpretation"=n_distinct(viz_item_id),
+    "mean length in characters"=round(mean(length),1),
+    "total days with interpretation "=n_distinct(date)) %>% 
+  arrange(desc(`total interpretations`)) %>% 
+  head(10) %>% 
+  kable(caption="Total Interpretations and Comments, Top 10 users")
+
+total_int_comments<-nrow(interpretations)
+total_int_users<-length(unique(interpretations$user))
+
+
+}else{
+  print("No Interpretations found")
+  total_int_comments<-0
+  total_int_users<-0
+  int_table<-NULL %>% as_tibble()
+  interpretations<-NULL
+}
+
+int_table
+```
+
+Overall, `r total_int_comments` total interpretations and comments were left by `r total_int_users` users.
+
+# Viz Profiles
+
+Print out the visualization with stats about it.
+
+A usage report for each visualization could look like this, with one page per visualization in the system.
+
+```{r message=FALSE, warning=FALSE, messages=FALSE, warnings=FALSE}
+viz_focus<-"TPLm2dVoCtO"
+
+url<-paste0(baseurl, "api/visualizations/",viz_focus,"/data.png")
+# resp<-GET(url)
+
+r<-suppressWarnings(GET(url, 
+    write_disk("test.png", overwrite = TRUE)))
+```
+
+```{r  out.width='100%'}
+knitr::include_graphics('./test.png')
+
+viz_users %>% 
+  filter(id==viz_focus) %>% 
+  select(name,type,createdBy.name,created) %>% 
+  t() %>%
+  kable(caption="Visualization Details")
+
+viz_users_dash %>% 
+    filter(id==viz_focus) %>% select(dash_id) %>% 
+    left_join(dash_views, by=c("dash_id"="favoriteuid")) %>% 
+    count(dash_name, sort=T) %>% 
+    kable(caption="Total Views of dashboards with this Visualization")
+
+interpretations %>% 
+  filter(viz_item_id==viz_focus) %>% 
+  count(text_type) %>% 
+  kable(caption="Total interpretations and comments on Viz")
+
+# url<-paste0(baseurl,"api/svg.png")
+# resp<-POST(url, body=upload_file("pic_request.txt"), type="application/x-www-form-urlencoded;charset=UTF-8")
+# 
+# httr::content(resp)
+# obj<-read_file("pic_request.txt")
+# class(obj)
+```
+
+# Save
+
+CSV files written to the project's "outputs" directory
+
+```{r}
+
+outputs<-list(
+  "interpretations"=interpretations,
+  "dashboard_views"=dash_views,
+  "all_viz_dash_views"=views_dta,
+  "visualizations"=viz_users_dash
+)
+
+## If folder for outputs doesnt exist create one
+if (!dir.exists(here("outputs"))){
+  dir.create("outputs")
+}
+
+outputs %>% 
+  names(.) %>%
+  map(~ write_csv(outputs[[.]], here("outputs", paste0(., ".csv"))))
+
+
+```
